@@ -21,8 +21,8 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-22 18:11:26 +0100 (Tue, 22 Apr 2008) $
-# $LastChangedRevision: 326 $
+# $LastChangedDate: 2008-04-28 12:49:27 +0100 (Mon, 28 Apr 2008) $
+# $LastChangedRevision: 332 $
 # $LastChangedBy: helder $
 # 
 
@@ -32,7 +32,7 @@ Here we make the connection to the server.
 '''
 
 # Global Imports
-from imaplib2.imapp import IMAP4P, IMAP4P_SSL
+from imaplib2.imapp import IMAP4P
 
 # Local Imports
 from utils import *
@@ -55,14 +55,10 @@ class ImapServer(object):
         @param certfile: certificate chain file for the SSL connection.
         '''
         object.__init__(self)
-        if not port and ssl:
-            port = 993
-        elif not port and not ssl:
-            port = 143
-        if ssl:
-            self._imap = IMAP4P_SSL(host, port,keyfile,certfile )
-        else:
-            self._imap = IMAP4P(host, port)
+        
+        self._imap = IMAP4P(host=host, port=port, ssl=ssl, 
+            keyfile=keyfile,certfile=certfile )
+        
         self._folders = None
         self.sstatus = self._imap.sstatus
         
