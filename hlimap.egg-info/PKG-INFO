@@ -1,0 +1,11 @@
+Metadata-Version: 1.0
+Name: hlimap
+Version: 0.1dev
+Summary: High-level IMAP abstraction library for use with imaplibii
+Home-page: http://code.google.com/p/webpymail/
+Author: Helder Guerreiro
+Author-email: hguerreiro@gmail.com
+License: GNU General Public License v3
+Description: long_desc _morelater_
+Keywords: imap library
+Platform: UNKNOWN
