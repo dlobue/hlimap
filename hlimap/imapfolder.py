@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# hlimap - high level imap client library
+# hlimap - High level IMAP library
 # Copyright (C) 2008 Helder Guerreiro
 
 ## This file is part of hlimap.
@@ -21,31 +21,170 @@
 #
 # Helder Guerreiro <helder@paxjulia.com>
 #
-# $LastChangedDate: 2008-04-22 18:11:26 +0100 (Tue, 22 Apr 2008) $
-# $LastChangedRevision: 326 $
-# $LastChangedBy: helder $
-# 
+# $Id: imapfolder.py 20 2010-01-15 20:44:48Z hguerreiro $
+#
+from imapmessage import MessageList
+from imaplib2.parselist import Mailbox
+import base64
 
-'''imapfolder module, this is a part of the hlimap IMAP Lib
+class DupError(Exception): pass
+class NoSuchFolder(Exception): pass
+class NoFolderListError(Exception): pass
 
-Folder handling classes. Everything related to folders is handled here.
-'''
+class FolderTree(object):
+    def __init__(self, server ):
+        '''Initializes the folder tree.
+        '''
+        self._imap = server._imap
+        self.server = server
+        self.dl = None
+        self.folder_dict = {}
+        self.root_folder = []
+        self.selected = None
 
-# Imports
-from utils import *
-from imapmessage import *
+    def refresh_folders( self, subscribed=True ):
+        # It's very fast to retrieve the folder listing, so we just
+        # query the server for all the folders.
+        if subscribed:
+            flat_list = self._imap.lsub("", "*")
+        else:
+            flat_list = self._imap.list("", "*")
 
-Debug = 5
-# Classes
+        if not flat_list:
+            raise NoFolderListError('No folders found')
+
+        self.dl = flat_list[0].delimiter
+
+        for mailbox in flat_list:
+            self.add_folder( mailbox.parts, subscribed,
+                             noselect = mailbox.noselect() )
+
+        self.sort()
+
+    def add_folder( self, parts, subscribed, child = None, noselect = False ):
+        path = self.dl.join( parts )
+        if not self.folder_dict.has_key(path):
+            self.folder_dict[ path ] = { 'data' : Folder(self.server, self, parts,
+                                                         subscribed, noselect),
+                                         'children': [] }
+            if len(parts) == 1:
+                self.root_folder.append( path )
+
+        if child:
+            if child not in self.folder_dict[ path ]['children']:
+                self.folder_dict[ path ]['children'].append( child )
+
+        parent_parts = parts[:-1]
+
+        if parent_parts:
+            parent_path = self.dl.join( parent_parts )
+            if not self.folder_dict.has_key( parent_path ):
+                self.add_folder( parent_parts, False, child = path,
+                    noselect = True )
+            else:
+                self.add_folder( parent_parts, subscribed, child = path )
+
+
+    # Set folder properties
+    def set_properties(self, expand_list,  special_folders):
+        for folder_name in expand_list:
+            if self.folder_dict.has_key( folder_name ):
+                self.folder_dict[folder_name]['data'].set_expand(True)
+
+        for folder_name in special_folders:
+            if self.folder_dict.has_key( folder_name ):
+                self.folder_dict[folder_name]['data'].special = True
+
+    def sort(self, folder_list = None):
+        '''Sorts the folders.
+        '''
+        def compare( name1, name2 ):
+            spc1 = self.folder_dict[name1]['data'].special
+
+            spc2 = self.folder_dict[name2]['data'].special
+
+            if spc1 and not spc2:
+                return -1
+            elif not spc1 and spc2:
+                return 1
+            else:
+                return cmp( name1, name2 )
+
+        if not folder_list:
+            folder_list = self.root_folder
+
+        folder_list.sort(compare)
+
+        for folder_name in folder_list:
+            children = self.folder_dict[folder_name]['children']
+            if children:
+                self.sort( children )
+
+
+    def refresh_status(self):
+        for folder in self.iter_all():
+            folder.refresh_status()
+
+    # Iterators
+
+    def iter_all(self, folder_list = None):
+        '''Iteract through all the folders
+        '''
+        if folder_list == None:
+            folder_list = self.root_folder
+
+        for folder_name in folder_list:
+            yield self.folder_dict[folder_name]['data']
+            # iteract children
+            children = self.folder_dict[folder_name]['children']
+            for child in self.iter_all( children ):
+                yield child
+
+    def iter_expand(self, folder_list = None):
+        '''Iteract through the folders that have the folder.expanded flag_list
+        set.
+        '''
+        if folder_list == None:
+            folder_list = self.root_folder
+
+        for folder_name in folder_list:
+            folder = self.folder_dict[folder_name]['data']
+            yield folder
+            # iteract children
+            if folder.expanded:
+                children = self.folder_dict[folder_name]['children']
+                for child in self.iter_expand( children ):
+                    yield child
+
+    # Folder operations
+    def get_folder(self, path):
+        if not self.folder_dict.has_key(path):
+            try:
+                mailbox = self._imap.lsub("", path)[0]
+                self.dl = mailbox.delimiter
+            except IndexError:
+                raise NoSuchFolder(path)
+            self.add_folder( mailbox.parts, True,
+                child = None, noselect = mailbox.noselect() )
+
+        folder = self.folder_dict[path]['data']
+
+        if self.selected and self._imap.has_capability('UNSELECT'):
+            self._imap.unselect()
+            self.selected = None
+        self.selected = folder.select()
+
+        return folder
+
 
 class Flags(object):
     def __init__(self, flag_list, permanent_flags=[r'\*']):
         self.flag_list = flag_list
         self.permanent_flags = permanent_flags
-        
+
     def permanentOK(self, flag):
         '''Checks if the flag can be changed permanently.
-        
+
         (the session must be read/write)
         '''
         flag = flag.upper()
@@ -57,183 +196,190 @@ class Flags(object):
         elif flag in self.permanent_flags:
             return True
         return False
-        
+
     def flagOK(self, flag):
         '''Checks if flag  is applicable.
         '''
         flag = flag.upper()
         if flag in self.flag_list:
             return True
-            
+
     def keywords(self):
         '''Iterator through flags that don't begin with '\'
         '''
         for flag in self.flag_list:
             if flag[0] != '\\':
                 yield flag
-        
 
 class Folder(object):
-    def __init__(self, IMAP, folder, folder_list):
-        object.__init__(self)
-        self._imap = IMAP
-        # When we use imaplib to get the folder names we get 
-        # a str, however, if we invoque this with a unicode 
-        # string we will get an exception when we try to
-        # convert the utf-7 string in __unicode__. Because of this
-        # we force the convertion.
-        self.folder_list = folder_list
-        self.folder = folder
+    def __init__(self, server, tree, parts, subscribed=True,
+        noselect = False):
+        self._imap = server._imap
+        self.server = server
+        self.tree = tree
+        self.server = server
+
+        # Load the mailbox
+        self.name = parts[-1]
+        self.path = tree.dl.join( parts )
+        if len(parts) > 1:
+            self.parent = tree.dl.join( parts[:-1] )
+        else:
+            self.parent = None
+        self.parts = parts
+
+        # Tree behavior
+        self.expanded = False
+        self.special = False
+        self.noselect = noselect
+        self.subscribed = subscribed
+
+        # Status
+        self.status = {}
         self.flags = None
-        self.__messages = None
-        self.setStatus()
-     
+
+        # Messages
+        self.__message_list = None
+
+    # Attributes
+    def haschildren(self):
+        return bool(self.tree.folder_dict[self.path]['children'])
+    has_children = property( haschildren )
+
+    def set_expand(self, value):
+        self.expanded = value
+        #if value:
+            ## If the folder is to be expanded then all parent folders
+            ## should also be expanded
+            #if self.parent:
+                #self.tree.folder_dict[self.parent]['data'].set_expand(True)
+
+    # Mailbox statistics
+    def refresh_status(self):
+        if not self.noselect:
+            self.status = self._imap.status(self.path,
+                '(MESSAGES RECENT UIDNEXT UIDVALIDITY UNSEEN)')
+        else:
+            self.status = {}
+
+    def get_status(self, prop):
+        if not self.status:
+            self.refresh_status()
+        return self.status[prop]
+
+    def messages(self):
+        return self.get_status('MESSAGES')
+    total = messages
+    def recent(self):
+        return self.get_status('RECENT')
+    def uid_next(self):
+        return self.get_status('UIDNEXT')
+    def uid_validity(self):
+        return self.get_status('UIDVALIDITY')
+    def unseen(self):
+        return self.get_status('UNSEEN')
+
+    # Mailbox name
+    def level(self):
+        return len(self.parts)-1
+
+    def last_level(self):
+        return self.name
+
+    def native(self):
+        '''Return the mailbox in raw format using the delimiter
+        understood by the server.
+        '''
+        return self.path
+
+    def url(self):
+        '''Return the folder name on a url safe way
+        '''
+        return base64.urlsafe_b64encode(self.path)
+
+    def unicode_name(self):
+        return self.__unicode__()
+
+    # Messages
     def append( self, message ):
         '''Appends a message to this folder
         '''
-        self._imap.append( self.folder.native(), message, '(\Seen)' )
-    
-    def url(self):
-        return self.folder.url()
-        
-    def unicode(self):
-        return self.__unicode__()
-  
-    def __unicode__(self):
-        try:
-            return unicode(self.folder.get_str('.').replace('+','+-').replace('&','+'),'utf-7')
-        except UnicodeDecodeError:
-            return unicode(self.folder.get_str('.').replace('+','+-').replace('&','+'),'utf-8')
-        # The inverse is: u'ã'.encode('utf-7').replace('+','&') Returns: '&AOM-'
-                
-    def __str__(self):
-        return self.__unicode__().encode('utf-8')
-     
-    def _getMessages(self):
-        if not self.__messages:
-            self.__messages = Messages(self._imap, self.folder )
-        return self.__messages
-    messages = property(_getMessages)
-        
+        self._imap.append( self.path, message, '(\Seen)' )
+
+    # Folder operations:
     def select(self):
-        if self.folder_list.isSelected():
-            self._imap.close()
-        result = self._imap.select(self.folder.native())
-        self.folder_list.setSelected( self.folder.native() )
-        
+        def get_status( result, key ):
+            try:
+                return result[key]
+            except KeyError:
+                return 0
+
+        result = self._imap.select( self.path )
+
         self.flags = Flags(result['FLAGS'], result['PERMANENTFLAGS'])
-        
-        self.status['MESSAGES'] = result['EXISTS'] 
-        # What's the diff between MESSAGES from the STATUS command and EXISTS 
+
+        self.status['MESSAGES'] = result['EXISTS']
+        # What's the diff between MESSAGES from the STATUS command and EXISTS
         # from the optional responses of the SELECT command? They sure return
         # different values...
-        try:
-            self.status['RECENT'] = result['RECENT']
-        except:
-            self.status['RECENT'] = 0
-        try:
-            self.status['UNSEEN'] = result['UNSEEN']
-        except:
-            self.status['UNSEEN'] = 0
-           
+
+        self.status['RECENT'] = get_status(result, 'RECENT')
+        self.status['UNSEEN'] = get_status(result, 'UNSEEN')
+        if self._imap.has_capability('UIDPLUS'):
+            self.status['UIDNEXT'] = get_status(result, 'UIDNEXT')
+            self.status['UIDVALIDITY'] = get_status(result, 'UIDVALIDITY')
+
         return self
-        
-    def setStatus(self):
-        if self.folder.noselect():
-            self.status = {}
-            return
-        else:
-            self.status = self._imap.status(self.folder.native(),
-                '(MESSAGES RECENT UIDNEXT UIDVALIDITY UNSEEN)')
-        
-        if not self.status:
-            raise HLError('Couldn\'t get the status for folder'
-                ' %s' % self.folder)
-                
-    def total(self):
-        '''Total number o messages on the mailbox
-        '''
-        return self.status['MESSAGES']
-        
-    def recent(self):
-        '''Number of recent messages on the mailbox
-        '''
-        return self.status['RECENT']
-        
-    def unseen(self):
-        '''Number of unseen messages on the mailbox
-        '''
-        return self.status['UNSEEN']
 
-class Folders(object):
-    '''Manages the folders tree. This is essencialy a container class for the
-    folder list. 
-    
-    We can get a folder in one of two ways, either we reference the folder just
-    as if this class was a dictionary:
-    
-    >>> M = ImapServer('example.com')
-    >>> M.login('example user','example pass')
-    >>> folder = M.folders['INBOX']
-    
-    Or we can iteract through the folders:
-    
-    >>> M = ImapServer('example.com')
-    >>> M.login('example user','example pass')
-    >>> for folder in folders:
-    ...     print folder
-    INBOX.Teste UTF-8 çãáàâ
-    INBOX.Trash
-    INBOX.Tretas Maximas
-    INBOX
-    
-    The main diference is that in the first case we issue a list/lsub IMAP 
-    command to get ONLY the folder data. On the second case the list command 
-    used fetches all the folders that match the pattern provided on the 
-    constructor.
-    
-    The list/lsub commands are fairly fast, however, since we issue a status 
-    imap command for each folder, this can get very slow. Thus the two methods
-    to get a folder.
-    '''
-    def __init__(self, IMAP, directory = '', subscribed = True, pattern = '*'):
-        object.__init__(self)
-        self._imap = IMAP
-        self.sstatus = IMAP.sstatus
-        self.directory = directory
-        self.subscribed = subscribed
-        self.pattern = pattern
-        self._folders = None
-        self.selected = '' # Selected folder name
-    
-    def _getFolders(self):
-        if self.subscribed:
-            result = self._imap.lsub(self.directory, self.pattern)
-        else:
-            result = self._imap.list(self.reference, self.pattern)
+    def expunge(self):
+        self._imap.expunge()
+        self.__message_list = None
 
-        self._folders = result
-       
-    def __getitem__(self, folder):
-        if isinstance(folder, str) or isinstance(folder, unicode):
-            # Directly accessing a folder, retrieve folder info
-            folder = base64.urlsafe_b64decode(str(folder))
-            folder = self._imap.list(folder, '%')[0]
-            
-        return Folder(self._imap, folder, self)
+    def set_flags(self, message_list, *args ):
+        return self._imap.store_smart(message_list, '+FLAGS.SILENT', args)
+
+    def reset_flags(self, message_list, *args ):
+        return self._imap.store_smart(message_list, '-FLAGS.SILENT', args)
+
+    # Message list management
+    def _get_message_list(self):
+        if not self.__message_list:
+            self.__message_list = MessageList( self.server, self )
+        return self.__message_list
+    message_list = property(_get_message_list)
+
+    def have_messages(self):
+        '''Are there any messages on the folder?'''
+        return self.message_list.have_messages()
+
+    def refresh_messages(self):
+        self.message_list.refresh_messages()
+
+    def paginator(self):
+        return self.message_list.paginator
+
+    # Special methods
+    def __unicode__(self):
+        mailbox = self.name
+        try:
+            return unicode(mailbox.replace('+','+-').replace('&','+'),'utf-7')
+        except UnicodeDecodeError:
+            return unicode(mailbox.replace('+','+-').replace('&','+'),'utf-8')
+
+    def __repr__(self):
+        return '<Folder instance "%s">' % (self.name)
+
+    def __getitem__(self, message_id ):
+        '''Returns Message Object'''
+        if type(message_id) != int:
+            raise TypeError('The message id must ben an integer.')
+
+        return self.message_list.get_message( message_id )
 
     def __iter__(self):
-        if not self._folders:
-            self._getFolders()
-            
-        for folder in self._folders:
-            yield self.__getitem__( folder )
-        
-    def refresh(self):
-        self._getFolders()
-        
-    def setSelected( self, folder ):
-        self.selected = folder
-        
-    def isSelected(self):
-        return bool(self.selected)
+        return self.message_list.msg_iter_page()
+
+
+
+
+
