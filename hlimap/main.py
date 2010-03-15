@@ -32,11 +32,11 @@ Here we make the connection to the server.
 '''
 
 # Global Imports
-from imaplib2.imapp import IMAP4P
+from imaplibii.imapp import IMAP4P
 
 # Local Imports
 from utils import *
-from imapfolder import Folders
+from imapfolder import FolderTree
 
 class ImapServer(object):
     '''Establishes the server connection, and does the authentication. 
@@ -44,20 +44,23 @@ class ImapServer(object):
     '''
     
     def __init__(self, host='localhost', port=None, ssl=False, 
-        keyfile=None, certfile=None):
+        stream=False, keyfile=None, certfile=None):
         '''
-        @param host: host name of the imap server;
+        @param host: host name of the imap server, or command to initiate
+            pre-authenticated tunnel;
         @param port: port to be used. If not specified it will default to 143 
             for plain text and 993 for ssl;
         @param ssl: Is the connection ssl?
         @type ssl: Bool
+        @param stream: Is this a pre-authenticated stream?
+        @type stream: Bool
         @param keyfile: PEM formatted private key;
         @param certfile: certificate chain file for the SSL connection.
         '''
         object.__init__(self)
         
         self._imap = IMAP4P(host=host, port=port, ssl=ssl, 
-            keyfile=keyfile,certfile=certfile )
+            stream=stream, keyfile=keyfile,certfile=certfile )
         
         self._folders = None
         self.sstatus = self._imap.sstatus
@@ -69,7 +72,7 @@ class ImapServer(object):
         @param password:
         
         @return: it returns the LOGIN imap4 command response on the format 
-            defined on the imaplib2 library.
+            defined on the imaplibii library.
         '''
         return self._imap.login(username, password)
             
@@ -82,7 +85,7 @@ class ImapServer(object):
         it's best to destroy the instance and let the destructor do the logout.
         
         @return: it returns the LOGOUT imap4 command response on the format 
-            defined on the imaplib2 library.
+            defined on the imaplibii library.
         '''
         return self._imap.logout()
                
@@ -92,7 +95,7 @@ class ImapServer(object):
         @return: a L{Folders<Folders>} instance.
         '''
         if not self._folders:
-            self._folders = Folders(self._imap)
+            self._folders = FolderTree(self._imap)
         return self._folders
        
     folders = property(getFolders, None, None, (

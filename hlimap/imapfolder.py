@@ -24,7 +24,7 @@
 # $Id: imapfolder.py 20 2010-01-15 20:44:48Z hguerreiro $
 #
 from imapmessage import MessageList
-from imaplib2.parselist import Mailbox
+from imaplibii.parselist import Mailbox
 import base64
 
 class DupError(Exception): pass
